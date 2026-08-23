@@ -1,16 +1,31 @@
 # Threshold — Achievement & Badge Engine
 
-An event-driven Laravel service that turns customer purchase activity into unlocked
-achievements, rolls achievements up into badges, and triggers an automated ₦300 cashback
-payout when a badge is earned.
+I built this for Bumpa's backend assessment. A customer makes a purchase, that unlocks
+achievements, enough achievements unlock a badge, and unlocking a badge pays out a ₦300
+cashback.
 
-Built to demonstrate three things: event-driven architecture in Laravel, module
-boundaries that could be peeled into separate services, and a rules engine that's
-config-driven rather than hardcoded.
+I used it to show three things I care about: event-driven design done properly in
+Laravel, module boundaries clean enough that a piece of this could become its own service
+later, and a rules engine where adding a new achievement or badge is a database row, not
+a code change.
 
-Out of scope, stubbed deliberately: real ecommerce checkout, real payment provider,
-authentication. Each is stubbed behind a clean interface so the *pattern* is provable
-without building a full store.
+Real ecommerce checkout, a real payment provider, and authentication are deliberately
+stubbed — the spec asks for that, and building any of them for real would be solving a
+different problem than the one being assessed.
+
+## Table of Contents
+
+- [Setup](#setup)
+- [Running tests](#running-tests)
+- [How it works](#how-it-works)
+  - [Domain model](#domain-model)
+  - [Event flow](#event-flow)
+  - [Not doing anything twice by accident](#not-doing-anything-twice-by-accident)
+  - [Module boundaries](#module-boundaries)
+  - [Swapping in a real payment provider](#swapping-in-a-real-payment-provider)
+  - [API endpoint](#api-endpoint)
+- [What I Deliberately Did Not Build, and Why](#what-i-deliberately-did-not-build-and-why)
+- [What I Would Do With Two More Weeks](#what-i-would-do-with-two-more-weeks)
 
 ---
 
@@ -29,33 +44,25 @@ docker compose up -d
 docker compose exec app composer install
 docker compose exec app php artisan key:generate
 docker compose exec app php artisan migrate --seed
-docker compose restart queue
 ```
 
-This starts five containers: `app` (PHP-FPM), `webserver` (nginx, serving on
-[http://localhost:8000](http://localhost:8000)), `queue` (processes the queued cashback
-listener), `db` (Postgres, exposed on host port `5439` to avoid clashing with a local
-Postgres install), and `adminer` (a database UI at
-[http://localhost:8201](http://localhost:8201) — server `db`, username `threshold`,
-password `password`).
+This brings up five containers: the app itself (PHP-FPM), nginx on
+[http://localhost:8000](http://localhost:8000), a queue worker for the cashback job,
+Postgres (port `5439`, so it won't clash with a Postgres you might already have running),
+and Adminer at [http://localhost:8201](http://localhost:8201) if you want to look at the
+database directly (server `db`, user `threshold`, password `password`).
 
-`queue` starts before `vendor/` exists (composer hasn't run yet), so it crash-loops
-briefly on boot — that's expected. The final `restart` above just makes sure it's picked
-up the dependencies once they're there, since a crashed container doesn't always notice a
-now-populated bind mount on its own retry.
+The queue worker won't start until the app is actually ready, so you don't need to
+babysit it or restart anything by hand.
 
-The whole project directory is bind-mounted into `app`/`queue`/`webserver`, and
-`.env.example` already has the Docker network's Postgres host (`DB_HOST=db`) baked in —
-no environment-variable overrides in `docker-compose.yml` to keep in sync with it.
-
-Seed some demo data and fire a purchase:
+Try it out:
 
 ```bash
 docker compose exec app php artisan orders:simulate 1
 curl http://localhost:8000/users/1/achievements
 ```
 
-Stop the stack with `docker compose down` (add `-v` to also drop the Postgres volume).
+`docker compose down` stops everything (add `-v` if you also want to drop the database).
 
 ### Without Docker
 
@@ -64,13 +71,12 @@ composer install
 cp .env.example .env
 ```
 
-Then edit `.env` and set `DB_CONNECTION=sqlite` (or point `DB_HOST`/`DB_PORT` at a
-Postgres instance you're running yourself) before continuing:
+Set `DB_CONNECTION=sqlite` in `.env` (or point it at your own Postgres), then:
 
 ```bash
 php artisan key:generate
 php artisan migrate --seed
-composer run dev   # serves the app + a queue worker together
+composer run dev
 ```
 
 ## Running tests
@@ -79,109 +85,74 @@ composer run dev   # serves the app + a queue worker together
 docker compose exec app php artisan test
 ```
 
-or, without Docker:
-
-```bash
-php artisan test
-```
-
-All feature/unit tests run against an in-memory SQLite database and the `sync` queue
-driver (see `phpunit.xml`), regardless of what `.env` points at — no external services are
-needed to run the suite.
+or just `php artisan test` if you're not using Docker. Tests run against an in-memory
+SQLite database no matter what your `.env` says, so nothing external needs to be running.
 
 ---
 
-## Design decisions
+## How it works
 
 ### Domain model
 
-For every purchase, `OrderCompleted` is fired. Achievements are config-driven rows
-(`achievement_group`, `name`, `trigger_type`, `threshold`, `sort_order`) — adding one is a
-database insert, not a code change. Badges are **count-based**: a badge unlocks once a
-user's *total* unlocked-achievement count reaches its `required_achievement_count`, not
-because a specific named set of achievements was completed. The spec's own worked example
-("5 unlocked → 3 more for Advanced") is a running total against a threshold, which is what
-this models directly.
+A purchase fires `OrderCompleted`. Achievements are rows in a table (name, threshold,
+sort order) — adding a new one is a database insert, not a deploy. Badges are
+count-based: a badge unlocks once a user's total number of unlocked achievements hits its
+threshold, rather than needing a specific named set of achievements. The spec's own
+example — "5 unlocked, 3 more for Advanced" — is exactly a running count against a
+threshold, so that's what I modeled.
 
 ### Event flow
 
 ```
-OrderCompleted (user, order)
-  └─ CheckAchievementUnlocks → writes UserAchievement rows → fires AchievementUnlocked
-       └─ CheckBadgeUnlocks → writes UserBadge rows → fires BadgeUnlocked  [queued below]
-            └─ TriggerCashback (queued) → calls the payment provider → CashbackTransaction
+OrderCompleted
+  → unlocks achievements → fires AchievementUnlocked
+      → unlocks badges → fires BadgeUnlocked
+          → (queued) pays out cashback
 ```
 
-Achievement/badge unlocking is synchronous — it's cheap, in-process, and the customer's
-achievements endpoint should reflect it immediately. The payment call is the one thing
-that's slow and can fail, so `TriggerCashback` is queued and retried by Laravel's built-in
-queue rather than blocking the request that unlocked the badge.
+Unlocking achievements and badges happens right away — it's cheap, and I want the
+achievements endpoint to reflect it immediately. The payment call is the one part that's
+slow and can fail, so that's the only piece that runs in the background on a queue.
 
-### Idempotency
+### Not doing anything twice by accident
 
-Every unlock rule is safe to redeliver:
-
-- `user_achievements` / `user_badges` have unique constraints on `(user_id, achievement_id)`
-  / `(user_id, badge_id)`, so re-processing the same unlock never double-writes.
-- Purchase/achievement counts are **denormalized counters**
-  (`user_purchase_counts`, `user_achievement_counts`) rather than live `COUNT(*)` queries
-  into another module's table — but an atomic `increment()` only stops a *lost* update, not
-  a *duplicate* one, so each counter is paired with an idempotency ledger
-  (`processed_orders`, `processed_achievement_unlocks`) keyed by the id the triggering
-  event already carries. A redelivered event increments the ledger's `insertOrIgnore` and
-  nothing else — the counter only moves on a genuinely new row.
-- `CashbackTransaction` inserts its row as `pending` **before** calling the payment
-  provider, catching a unique-constraint violation as "already handled." Calling the
-  provider first and inserting after would let a queue retry pay out twice while the
-  second insert silently failed — ordering here is what makes the constraint an actual
-  guarantee, not just a race.
+If the same event gets sent twice — a retry, a repeated delivery, whatever — nothing here
+processes it a second time. Unlocking an achievement or badge twice is blocked at the
+database level: the database itself won't allow two rows for the same user and the same
+achievement or badge. Purchase and achievement counts are stored as running totals rather
+than counted live, and each one is paired with a small table that remembers "have I
+already counted this," so a repeated delivery can't push the number up twice. The
+cashback record is created as `pending` before the payment call goes out, so a repeated
+payout attempt just gets blocked by the database instead of actually charging twice. And
+if the payment call itself blows up (network error, provider down), that's caught and the
+record is marked `failed` rather than left stuck on `pending` forever.
 
 ### Module boundaries
 
 ```
-app/Modules/
-  Orders/        Order model, OrderService, fires OrderCompleted
-  Achievements/  Achievement, AchievementGroup, UserAchievement, listens for
-                 OrderCompleted, fires AchievementUnlocked
-  Badges/        Badge, UserBadge, listens for AchievementUnlocked, fires BadgeUnlocked
-  Payments/      PaymentProviderInterface, FakePaystackProvider, CashbackTransaction,
-                 listens for BadgeUnlocked
+Orders        → fires OrderCompleted
+Achievements  → listens for OrderCompleted, fires AchievementUnlocked
+Badges        → listens for AchievementUnlocked, fires BadgeUnlocked
+Payments      → listens for BadgeUnlocked, pays out
 ```
 
-A module never queries another module's tables directly — it only reacts to the payload
-of an event it's subscribed to. Plain PSR-4 namespacing under `app/Modules`, no package
-(`nwidart/laravel-modules`): adding a dependency to demonstrate modularity would be the
-wrong flex for something this size. The folder + namespace discipline is the
-demonstration.
+No module reaches into another module's database tables — they only react to events.
+That's what would let any one of these become its own service later without a rewrite. I
+also added a small hook, called `EventPublisher` (it just logs for now), so an outside
+service could listen to these events without ever touching this app's database directly —
+what those events look like is written down in [`docs/events.md`](docs/events.md).
 
 ### Swapping in a real payment provider
 
-`FakePaystackProvider` logs the call and returns a synthetic success. To go live, bind
-`App\Modules\Payments\Contracts\PaymentProviderInterface` to a real client — the binding
-lives in `config/payments.php` (`PAYMENT_PROVIDER` env var), so this is a one-line change,
-not a rewrite of `TriggerCashback`. The cashback amount is likewise config-driven
-(`BADGE_CASHBACK_AMOUNT_KOBO`, defaulting to 30,000 kobo = ₦300 per the spec).
-
-### Extraction seam: could this become a separate service?
-
-The module boundaries above prove the *modules* are decoupled from each other inside one
-process — they only talk through event payloads, never each other's tables. That's a
-necessary condition for "this could be its own service," but not sufficient on its own,
-since everything still runs through Laravel's synchronous, in-process `Event` facade.
-
-`App\Contracts\EventPublisher` (bound to `App\Services\LogEventPublisher`, which just logs
-today) is the seam an external message broker would implement — swapping that one binding
-for a real SQS/Kafka publisher is the entire migration to let another service subscribe.
-`CheckAchievementUnlocks` and `CheckBadgeUnlocks` both call it after their local unlock
-logic runs. The versioned payload contracts a Product or Payments service would actually
-integrate against are written down in [`docs/events.md`](docs/events.md) — deliberately
-smaller than the internal Laravel event objects (an id, not a full `User` model).
+`FakePaystackProvider` just logs and returns success. Swapping it for a real Paystack (or
+any other) client is a one-line config change (`PAYMENT_PROVIDER` in `.env`) —
+`TriggerCashback` doesn't need to change at all.
 
 ### API endpoint
 
-`GET /users/{user}/achievements` — defined in `routes/web.php`, matching the assessment
-spec's explicit instruction (an unusual choice for a JSON endpoint, since Laravel's
-convention is `routes/api.php`, but the spec names the file directly).
+`GET /users/{user}/achievements`, in `routes/web.php` — the spec names that file
+specifically, which is unusual for a JSON endpoint, but I matched it literally rather
+than defaulting to `routes/api.php`.
 
 ```json
 {
@@ -193,9 +164,43 @@ convention is `routes/api.php`, but the spec names the file directly).
 }
 ```
 
-`next_available_achievements` returns one achievement per group — the lowest `sort_order`
-one the user hasn't unlocked yet — and omits any group the user has fully completed.
-`current_badge` reflects the highest badge actually awarded (a real `UserBadge` row, and
-therefore a triggered cashback), not a live recomputation against the achievement count,
-so it can't report a badge as "current" a beat before its payout has actually gone through
-the event chain.
+`next_available_achievements` is one per group — whichever the user hasn't unlocked yet —
+and a group the user's already finished just doesn't show up. `current_badge` only
+reflects a badge that's actually been awarded and paid out, not one that merely qualifies
+by the numbers.
+
+---
+
+## What I Deliberately Did Not Build, and Why
+
+- **A real payment provider** — the interface and the setting to swap it in are already
+  there, I just didn't wire up an actual merchant account for a take-home.
+- **Caching the achievements endpoint** — the queries are already fast at this scale. I'd
+  reach for Redis the moment this endpoint saw real traffic, not before.
+- **Telling apart "the payment was declined" from "we're not sure what happened"** —
+  right now both end up `failed`. A timeout doesn't actually mean the charge failed, and
+  the honest fix is checking back with the provider later, not guessing in code.
+- **Curated achievement sets for badges** — count-based matched the spec's own example
+  better, and it's a one-row insert to add a badge. A pivot table for curated sets is an
+  easy add later if it's ever needed.
+- **More than one achievement trigger type** — the column supports it, only
+  `purchase_count` is wired up because that's all the spec asked for.
+- **Auth, rate limiting, and API versioning on the endpoint** — the spec explicitly stubs
+  auth, so this is an open lookup by user id today. Not something I'd ship like this for
+  real.
+
+## What I Would Do With Two More Weeks
+
+1. Add Redis caching to the achievements endpoint, and actually measure it before and
+   after instead of assuming it helps.
+2. Build a job that checks back with the payment provider for anything that failed for an
+   unclear reason, instead of just marking it failed and moving on.
+3. Wire up a real payment provider, and support the case where it confirms a payout later
+   through a webhook instead of right away in the response.
+4. Add authentication so the achievements endpoint is scoped to whoever's logged in, plus
+   versioning and rate limiting.
+5. Add a second way to unlock achievements (not just purchases), to actually prove this
+   can support more than one instead of just claiming it can.
+6. Swap the logging-only event publisher for a real message queue (SQS or similar), and
+   actually split one of these modules out into its own service instead of just leaving
+   the option open.
