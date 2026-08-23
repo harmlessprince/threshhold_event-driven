@@ -1,57 +1,89 @@
 services:
-  migrate:
-    build: .
-    environment: &app_env
-      DB_CONNECTION: pgsql
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_DATABASE: threshold
-      DB_USERNAME: threshold
-      DB_PASSWORD: secret
-      QUEUE_CONNECTION: database
-    depends_on:
-      postgres:
-        condition: service_healthy
-    command: php artisan migrate --force
-
+  # PHP Service
   app:
-    build: .
-    ports:
-      - "8000:8000"
-    environment: *app_env
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-    # Not `php artisan serve`: its wrapper process only passes an allowlist of env vars
-    # (APP_ENV, PATH, XDEBUG_*, ...) through to the child process that actually handles
-    # requests — DB_CONNECTION and friends aren't in it, so the request-handling process
-    # silently falls back to whatever's baked into the .env file. Invoking PHP's built-in
-    # server directly makes the container's real environment (set above) the one PHP sees.
-    command: sh -c "cd public && php -S 0.0.0.0:8000 ../vendor/laravel/framework/src/Illuminate/Foundation/resources/server.php"
+    build:
+      args:
+        user: threshold
+        uid: 1000
+      context: ./
+      dockerfile: Dockerfile
+    image: threshold-app
+    container_name: threshold-app
+    restart: unless-stopped
+    tty: true
+    working_dir: /var/www
+    volumes:
+      - ./:/var/www
+      - ./docker-compose/php/local.ini:/usr/local/etc/php/conf.d/local.ini
+    networks:
+      - threshold-network
 
+  # Queue worker — same image as app, just runs queue:work instead of php-fpm.
+  # Processes TriggerCashback, which is deliberately queued (see README).
   queue:
-    build: .
-    environment: *app_env
+    image: threshold-app
+    container_name: threshold-queue
+    restart: unless-stopped
+    tty: true
+    working_dir: /var/www
+    volumes:
+      - ./:/var/www
+      - ./docker-compose/php/local.ini:/usr/local/etc/php/conf.d/local.ini
     depends_on:
-      migrate:
-        condition: service_completed_successfully
+      - app
+      - db
     command: php artisan queue:work --tries=3
+    networks:
+      - threshold-network
 
-  postgres:
+  # Nginx Service
+  webserver:
+    image: nginx:alpine
+    container_name: threshold-server
+    restart: unless-stopped
+    tty: true
+    ports:
+      - "8000:80"
+    volumes:
+      - ./:/var/www
+      - ./docker-compose/nginx/conf.d/:/etc/nginx/conf.d/
+    networks:
+      - threshold-network
+
+  # Postgres Service
+  db:
     image: postgres:16-alpine
-    environment:
-      POSTGRES_DB: threshold
-      POSTGRES_USER: threshold
-      POSTGRES_PASSWORD: secret
+    container_name: threshold-db
+    restart: unless-stopped
+    tty: true
     ports:
       - "5439:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U threshold"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+      - dbdata:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: threshold
+      POSTGRES_USER: threshold
+      POSTGRES_PASSWORD: password
+    networks:
+      - threshold-network
 
+  adminer:
+    image: adminer
+    container_name: threshold-adminer
+    restart: unless-stopped
+    ports:
+      - "8201:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: db
+    networks:
+      - threshold-network
+
+# Volumes
 volumes:
-  postgres_data:
+  dbdata:
+    driver: local
+
+# Docker Networks
+networks:
+  threshold-network:
+    driver: bridge

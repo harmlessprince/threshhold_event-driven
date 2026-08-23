@@ -16,38 +16,52 @@ without building a full store.
 
 ## Setup
 
+### Dependencies
+
+- [Docker](https://docs.docker.com/desktop/)
+
 ### Docker (recommended)
 
 ```bash
 cp .env.example .env
-docker compose up --build
+docker compose build app
+docker compose up -d
+docker compose exec app composer install
+docker compose exec app php artisan key:generate
+docker compose exec app php artisan migrate --seed
 ```
 
-This starts four containers: `migrate` (runs once, then exits — `app` and `queue` both
-wait for it so neither ever races the schema), `app` (serves on
+This starts five containers: `app` (PHP-FPM), `webserver` (nginx, serving on
 [http://localhost:8000](http://localhost:8000)), `queue` (processes the queued cashback
-listener), and `postgres` (exposed on host port `5439` to avoid clashing with a local
-Postgres install).
+listener), `db` (Postgres, exposed on host port `5439` to avoid clashing with a local
+Postgres install), and `adminer` (a database UI at
+[http://localhost:8201](http://localhost:8201) — server `db`, username `threshold`,
+password `password`).
 
-`.env.example` ships with a real, pre-generated `APP_KEY` rather than a blank one — this
-is a demo app with no production data behind it, and baking in a key means the one-liner
-above works with no extra step (there's no bind mount into the containers, so a key
-generated *after* the image is built wouldn't reach `queue`'s or `migrate`'s separate
-containers anyway).
+The whole project directory is bind-mounted into `app`/`queue`/`webserver`, and
+`.env.example` already has the Docker network's Postgres host (`DB_HOST=db`) baked in —
+no environment-variable overrides in `docker-compose.yml` to keep in sync with it.
 
 Seed some demo data and fire a purchase:
 
 ```bash
-docker compose exec app php artisan db:seed
 docker compose exec app php artisan orders:simulate 1
 curl http://localhost:8000/users/1/achievements
 ```
+
+Stop the stack with `docker compose down` (add `-v` to also drop the Postgres volume).
 
 ### Without Docker
 
 ```bash
 composer install
 cp .env.example .env
+```
+
+Then edit `.env` and set `DB_CONNECTION=sqlite` (or point `DB_HOST`/`DB_PORT` at a
+Postgres instance you're running yourself) before continuing:
+
+```bash
 php artisan key:generate
 php artisan migrate --seed
 composer run dev   # serves the app + a queue worker together
@@ -56,24 +70,18 @@ composer run dev   # serves the app + a queue worker together
 ## Running tests
 
 ```bash
+docker compose exec app php artisan test
+```
+
+or, without Docker:
+
+```bash
 php artisan test
 ```
 
 All feature/unit tests run against an in-memory SQLite database and the `sync` queue
-driver (see `phpunit.xml`), so no external services are needed to run the suite.
-
-Running this inside the `app` container needs one extra step: the container's real
-environment already sets `DB_CONNECTION=pgsql` / `QUEUE_CONNECTION=database` for serving
-the app, and — a genuine PHP gotcha — those win over `phpunit.xml`'s `<env>` block no
-matter what, since real process environment variables are read from `$_SERVER`/`$_ENV`
-(populated once at process start) while PHPUnit's overrides only affect `putenv()`/
-`getenv()`, which Laravel's `env()` helper doesn't consult when `$_SERVER` already has a
-value. Override them for that one command instead:
-
-```bash
-docker compose exec -e DB_CONNECTION=sqlite -e DB_DATABASE=:memory: -e QUEUE_CONNECTION=sync \
-  -e CACHE_STORE=array -e SESSION_DRIVER=array app php artisan test
-```
+driver (see `phpunit.xml`), regardless of what `.env` points at — no external services are
+needed to run the suite.
 
 ---
 

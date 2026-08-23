@@ -1,21 +1,43 @@
-FROM php:8.3-cli
+FROM php:8.3-fpm
 
+# Arguments defined in docker-compose.yml
+ARG user
+ARG uid
+
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
-        libpq-dev \
-        libzip-dev \
-        unzip \
-        git \
-    && docker-php-ext-install pdo pdo_pgsql zip \
-    && rm -rf /var/lib/apt/lists/*
+    git \
+    curl \
+    libpng-dev \
+    libonig-dev \
+    libxml2-dev \
+    libzip-dev \
+    libpq-dev \
+    zip \
+    unzip
 
-COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+# Clear cache
+RUN apt-get clean && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /var/www/html
+# Install PHP extensions
+RUN docker-php-ext-install pdo_pgsql mbstring exif pcntl bcmath gd zip
 
-COPY . .
+# Get latest Composer
+COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
-RUN composer install --no-interaction --prefer-dist --optimize-autoloader
+# Add user for laravel application
+RUN groupadd -g ${uid} ${user}
+RUN useradd -u ${uid} -ms /bin/bash -g ${user} ${user}
 
-EXPOSE 8000
+# Copy existing application directory contents
+COPY . /var/www
 
-CMD ["php", "artisan", "serve", "--host=0.0.0.0", "--port=8000"]
+# Copy existing application directory permissions
+COPY --chown=${user}:${user} . /var/www
+
+# Change current user to the app user
+USER ${user}
+
+# Expose port 9000 and start php-fpm server
+EXPOSE 9000
+CMD ["php-fpm"]
