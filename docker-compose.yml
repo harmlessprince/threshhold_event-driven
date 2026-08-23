@@ -1,48 +1,98 @@
 services:
+  # PHP Service
   app:
-    build: .
-    ports:
-      - "8000:8000"
+    build:
+      args:
+        user: threshold
+        uid: 1000
+      context: ./
+      dockerfile: Dockerfile
+    image: threshold-app
+    container_name: threshold-app
+    restart: unless-stopped
+    tty: true
+    working_dir: /var/www
     volumes:
-      - .:/var/www/html
-    environment: &app_env
-      DB_CONNECTION: pgsql
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_DATABASE: threshold
-      DB_USERNAME: threshold
-      DB_PASSWORD: secret
-      QUEUE_CONNECTION: database
-    depends_on:
-      postgres:
-        condition: service_healthy
-    command: sh -c "php artisan migrate --force && php artisan serve --host=0.0.0.0 --port=8000"
+      - ./:/var/www
+      - ./docker-compose/php/local.ini:/usr/local/etc/php/conf.d/local.ini
+    networks:
+      - threshold-network
+    # Healthy once `composer install` has actually populated vendor/ — queue waits on
+    # this instead of starting immediately and crash-looping until it's true.
+    healthcheck:
+      test: ["CMD", "test", "-f", "/var/www/vendor/autoload.php"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
 
+  # Queue worker — same image as app, just runs queue:work instead of php-fpm.
+  # Processes TriggerCashback, which is deliberately queued (see README).
   queue:
-    build: .
+    image: threshold-app
+    container_name: threshold-queue
+    restart: unless-stopped
+    tty: true
+    working_dir: /var/www
     volumes:
-      - .:/var/www/html
-    environment: *app_env
+      - ./:/var/www
+      - ./docker-compose/php/local.ini:/usr/local/etc/php/conf.d/local.ini
     depends_on:
-      postgres:
+      app:
         condition: service_healthy
+      db:
+        condition: service_started
     command: php artisan queue:work --tries=3
+    networks:
+      - threshold-network
 
-  postgres:
+  # Nginx Service
+  webserver:
+    image: nginx:alpine
+    container_name: threshold-server
+    restart: unless-stopped
+    tty: true
+    ports:
+      - "8000:80"
+    volumes:
+      - ./:/var/www
+      - ./docker-compose/nginx/conf.d/:/etc/nginx/conf.d/
+    networks:
+      - threshold-network
+
+  # Postgres Service
+  db:
     image: postgres:16-alpine
-    environment:
-      POSTGRES_DB: threshold
-      POSTGRES_USER: threshold
-      POSTGRES_PASSWORD: secret
+    container_name: threshold-db
+    restart: unless-stopped
+    tty: true
     ports:
       - "5439:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U threshold"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+      - dbdata:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: threshold
+      POSTGRES_USER: threshold
+      POSTGRES_PASSWORD: password
+    networks:
+      - threshold-network
 
+  adminer:
+    image: adminer
+    container_name: threshold-adminer
+    restart: unless-stopped
+    ports:
+      - "8201:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: db
+    networks:
+      - threshold-network
+
+# Volumes
 volumes:
-  postgres_data:
+  dbdata:
+    driver: local
+
+# Docker Networks
+networks:
+  threshold-network:
+    driver: bridge
