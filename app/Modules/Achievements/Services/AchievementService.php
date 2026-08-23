@@ -64,7 +64,7 @@ class AchievementService
                 return $userAchievement->wasRecentlyCreated;
             })
             ->each(function (Achievement $achievement) use ($user): void {
-                AchievementUnlocked::dispatch($achievement->name, $user);
+                AchievementUnlocked::dispatch($achievement->name, $user, $achievement->id);
             })
             ->values();
     }
