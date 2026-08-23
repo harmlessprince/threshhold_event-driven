@@ -29,6 +29,7 @@ docker compose up -d
 docker compose exec app composer install
 docker compose exec app php artisan key:generate
 docker compose exec app php artisan migrate --seed
+docker compose restart queue
 ```
 
 This starts five containers: `app` (PHP-FPM), `webserver` (nginx, serving on
@@ -37,6 +38,11 @@ listener), `db` (Postgres, exposed on host port `5439` to avoid clashing with a 
 Postgres install), and `adminer` (a database UI at
 [http://localhost:8201](http://localhost:8201) — server `db`, username `threshold`,
 password `password`).
+
+`queue` starts before `vendor/` exists (composer hasn't run yet), so it crash-loops
+briefly on boot — that's expected. The final `restart` above just makes sure it's picked
+up the dependencies once they're there, since a crashed container doesn't always notice a
+now-populated bind mount on its own retry.
 
 The whole project directory is bind-mounted into `app`/`queue`/`webserver`, and
 `.env.example` already has the Docker network's Postgres host (`DB_HOST=db`) baked in —
