@@ -63,7 +63,7 @@ class BadgeService
                 return $userBadge->wasRecentlyCreated;
             })
             ->each(function (Badge $badge) use ($user): void {
-                BadgeUnlocked::dispatch($badge->name, $user);
+                BadgeUnlocked::dispatch($badge->name, $user, $badge->id);
             })
             ->values();
     }
