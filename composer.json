@@ -1,11 +1,12 @@
 {
     "$schema": "https://getcomposer.org/schema.json",
-    "name": "laravel/laravel",
+    "name": "harmlessprince/threshold",
     "type": "project",
-    "description": "The skeleton application for the Laravel framework.",
+    "description": "Event-driven achievement, badge, and cashback engine built for the Bumpa Senior Backend Engineer assessment.",
     "keywords": [
         "laravel",
-        "framework"
+        "event-driven",
+        "achievements"
     ],
     "license": "MIT",
     "require": {
