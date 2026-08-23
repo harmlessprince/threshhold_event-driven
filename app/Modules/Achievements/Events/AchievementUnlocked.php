@@ -11,10 +11,10 @@ class AchievementUnlocked
     use Dispatchable, SerializesModels;
 
     /**
-     * achievement_name and user are the spec's required payload shape (literal
-     * snake_case, not Laravel's usual camelCase). achievement_id rides along as an
-     * extra field for subscribers (e.g. Badges' idempotency ledger) that need a stable
-     * identifier — achievement name isn't guaranteed unique, only its slug is.
+     * achievement_name and user are the spec's required payload shape, written in
+     * snake_case to match it exactly. achievement_id rides along as an extra field for
+     * subscribers (e.g. Badges' idempotency ledger) that need a stable identifier —
+     * achievement name isn't guaranteed unique, only its slug is.
      */
     public function __construct(
         public readonly string $achievement_name,
