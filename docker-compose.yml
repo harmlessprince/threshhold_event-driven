@@ -3,8 +3,6 @@ services:
     build: .
     ports:
       - "8000:8000"
-    volumes:
-      - .:/var/www/html
     environment: &app_env
       DB_CONNECTION: pgsql
       DB_HOST: postgres
@@ -20,8 +18,6 @@ services:
 
   queue:
     build: .
-    volumes:
-      - .:/var/www/html
     environment: *app_env
     depends_on:
       postgres:
