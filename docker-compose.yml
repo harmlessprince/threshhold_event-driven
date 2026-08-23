@@ -27,7 +27,7 @@ services:
     # requests — DB_CONNECTION and friends aren't in it, so the request-handling process
     # silently falls back to whatever's baked into the .env file. Invoking PHP's built-in
     # server directly makes the container's real environment (set above) the one PHP sees.
-    command: php -S 0.0.0.0:8000 -t public vendor/laravel/framework/src/Illuminate/Foundation/resources/server.php
+    command: sh -c "cd public && php -S 0.0.0.0:8000 ../vendor/laravel/framework/src/Illuminate/Foundation/resources/server.php"
 
   queue:
     build: .
