@@ -1,10 +1,8 @@
 # Threshold — Achievement & Badge Engine
 
-I built this for Bumpa's backend assessment. A customer makes a purchase, that unlocks
-achievements, enough achievements unlock a badge, and unlocking a badge pays out a ₦300
-cashback.
+A customer makes a purchase, that unlocks achievements, enough achievements unlock a badge, and unlocking a badge pays out a ₦300 cashback.
 
-I used it to show three things I care about: event-driven design done properly in
+This shows three things: event-driven design done properly in
 Laravel, module boundaries clean enough that a piece of this could become its own service
 later, and a rules engine where adding a new achievement or badge is a database row, not
 a code change.
@@ -52,8 +50,7 @@ Postgres (port `5439`, so it won't clash with a Postgres you might already have 
 and Adminer at [http://localhost:8201](http://localhost:8201) if you want to look at the
 database directly (server `db`, user `threshold`, password `password`).
 
-The queue worker won't start until the app is actually ready, so you don't need to
-babysit it or restart anything by hand.
+The queue worker won't start until the app is actually ready.
 
 Try it out:
 
