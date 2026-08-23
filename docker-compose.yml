@@ -1,8 +1,6 @@
 services:
-  app:
+  migrate:
     build: .
-    ports:
-      - "8000:8000"
     environment: &app_env
       DB_CONNECTION: pgsql
       DB_HOST: postgres
@@ -14,14 +12,24 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    command: sh -c "php artisan migrate --force && php artisan serve --host=0.0.0.0 --port=8000"
+    command: php artisan migrate --force
+
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment: *app_env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: php artisan serve --host=0.0.0.0 --port=8000
 
   queue:
     build: .
     environment: *app_env
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     command: php artisan queue:work --tries=3
 
   postgres:
