@@ -5,6 +5,7 @@ namespace App\Modules\Achievements\Services;
 use App\Models\User;
 use App\Modules\Achievements\Events\AchievementUnlocked;
 use App\Modules\Achievements\Models\Achievement;
+use App\Modules\Achievements\Models\AchievementGroup;
 use App\Modules\Achievements\Models\ProcessedOrder;
 use App\Modules\Achievements\Models\UserAchievement;
 use App\Modules\Achievements\Models\UserPurchaseCount;
@@ -67,5 +68,40 @@ class AchievementService
                 AchievementUnlocked::dispatch($achievement->name, $user, $achievement->id);
             })
             ->values();
+    }
+
+    /**
+     * Names of the user's unlocked achievements, and the next achievement (by
+     * sort_order) still available in each group. Groups the user has fully
+     * completed are omitted from "next".
+     *
+     * @return array{unlocked_achievements: array<int, string>, next_available_achievements: array<int, string>}
+     */
+    public function summaryFor(User $user): array
+    {
+        $unlockedIds = UserAchievement::query()
+            ->where('user_id', $user->id)
+            ->pluck('achievement_id');
+
+        $unlockedAchievements = UserAchievement::query()
+            ->where('user_id', $user->id)
+            ->orderBy('unlocked_at')
+            ->with('achievement')
+            ->get()
+            ->pluck('achievement.name');
+
+        $nextAvailableAchievements = AchievementGroup::query()
+            ->with(['achievements' => fn ($query) => $query->orderBy('sort_order')])
+            ->get()
+            ->map(fn (AchievementGroup $group) => $group->achievements->first(
+                fn (Achievement $achievement) => ! $unlockedIds->contains($achievement->id)
+            ))
+            ->filter()
+            ->pluck('name');
+
+        return [
+            'unlocked_achievements' => $unlockedAchievements->values()->all(),
+            'next_available_achievements' => $nextAvailableAchievements->values()->all(),
+        ];
     }
 }
