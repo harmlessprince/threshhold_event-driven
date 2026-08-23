@@ -22,7 +22,12 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-    command: php artisan serve --host=0.0.0.0 --port=8000
+    # Not `php artisan serve`: its wrapper process only passes an allowlist of env vars
+    # (APP_ENV, PATH, XDEBUG_*, ...) through to the child process that actually handles
+    # requests — DB_CONNECTION and friends aren't in it, so the request-handling process
+    # silently falls back to whatever's baked into the .env file. Invoking PHP's built-in
+    # server directly makes the container's real environment (set above) the one PHP sees.
+    command: php -S 0.0.0.0:8000 -t public vendor/laravel/framework/src/Illuminate/Foundation/resources/server.php
 
   queue:
     build: .
