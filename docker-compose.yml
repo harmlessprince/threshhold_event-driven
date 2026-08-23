@@ -35,7 +35,7 @@ services:
       POSTGRES_USER: threshold
       POSTGRES_PASSWORD: secret
     ports:
-      - "5432:5432"
+      - "5439:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
