@@ -23,10 +23,17 @@ cp .env.example .env
 docker compose up --build
 ```
 
-This starts three containers: `app` (runs migrations, then serves on
+This starts four containers: `migrate` (runs once, then exits — `app` and `queue` both
+wait for it so neither ever races the schema), `app` (serves on
 [http://localhost:8000](http://localhost:8000)), `queue` (processes the queued cashback
 listener), and `postgres` (exposed on host port `5439` to avoid clashing with a local
 Postgres install).
+
+`.env.example` ships with a real, pre-generated `APP_KEY` rather than a blank one — this
+is a demo app with no production data behind it, and baking in a key means the one-liner
+above works with no extra step (there's no bind mount into the containers, so a key
+generated *after* the image is built wouldn't reach `queue`'s or `migrate`'s separate
+containers anyway).
 
 Seed some demo data and fire a purchase:
 
