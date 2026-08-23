@@ -17,6 +17,13 @@ services:
       - ./docker-compose/php/local.ini:/usr/local/etc/php/conf.d/local.ini
     networks:
       - threshold-network
+    # Healthy once `composer install` has actually populated vendor/ — queue waits on
+    # this instead of starting immediately and crash-looping until it's true.
+    healthcheck:
+      test: ["CMD", "test", "-f", "/var/www/vendor/autoload.php"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
 
   # Queue worker — same image as app, just runs queue:work instead of php-fpm.
   # Processes TriggerCashback, which is deliberately queued (see README).
@@ -30,8 +37,10 @@ services:
       - ./:/var/www
       - ./docker-compose/php/local.ini:/usr/local/etc/php/conf.d/local.ini
     depends_on:
-      - app
-      - db
+      app:
+        condition: service_healthy
+      db:
+        condition: service_started
     command: php artisan queue:work --tries=3
     networks:
       - threshold-network
