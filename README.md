@@ -62,6 +62,19 @@ php artisan test
 All feature/unit tests run against an in-memory SQLite database and the `sync` queue
 driver (see `phpunit.xml`), so no external services are needed to run the suite.
 
+Running this inside the `app` container needs one extra step: the container's real
+environment already sets `DB_CONNECTION=pgsql` / `QUEUE_CONNECTION=database` for serving
+the app, and — a genuine PHP gotcha — those win over `phpunit.xml`'s `<env>` block no
+matter what, since real process environment variables are read from `$_SERVER`/`$_ENV`
+(populated once at process start) while PHPUnit's overrides only affect `putenv()`/
+`getenv()`, which Laravel's `env()` helper doesn't consult when `$_SERVER` already has a
+value. Override them for that one command instead:
+
+```bash
+docker compose exec -e DB_CONNECTION=sqlite -e DB_DATABASE=:memory: -e QUEUE_CONNECTION=sync \
+  -e CACHE_STORE=array -e SESSION_DRIVER=array app php artisan test
+```
+
 ---
 
 ## Design decisions
